@@ -9,10 +9,24 @@ REPO="$HOME/.claude/state"
 GIT_LOCK="/tmp/claude-state-git.lock"
 cd "$REPO" || { echo "no $REPO" >&2; exit 1; }
 
-exec 9>"$GIT_LOCK"
-if ! flock -x -w 30 9 2>/dev/null; then
-  echo "state-commit: could not acquire git lock after 30s, skipping" >&2
-  exit 0
+# Portable atomic lock: prefer flock (Linux); fall back to mkdir-atomic (macOS/no-flock).
+LOCK_DIR="${GIT_LOCK}.d"
+if [ -d "$LOCK_DIR" ] && find "$LOCK_DIR" -maxdepth 0 -mmin +2 2>/dev/null | grep -q .; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+fi
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$GIT_LOCK"
+    if ! flock -x -w 30 9 2>/dev/null; then
+        echo "state-commit: could not acquire git lock after 30s, skipping" >&2; exit 0
+    fi
+else
+    _lk=0
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        _lk=$(( _lk + 1 ))
+        [ "$_lk" -ge 30 ] && { echo "state-commit: could not acquire git lock after 30s, skipping" >&2; exit 0; }
+        sleep 1
+    done
+    trap "rmdir '$LOCK_DIR' 2>/dev/null || true" EXIT INT TERM
 fi
 
 CUR="$REPO/$AGENT/current.md"
