@@ -57,6 +57,7 @@ fi
 
 python3 - "$SETTINGS" "$HOOKS_DIR" <<'PY'
 import json, sys, os
+
 settings_path, hooks_dir = sys.argv[1], sys.argv[2]
 
 with open(settings_path) as f:
@@ -64,40 +65,58 @@ with open(settings_path) as f:
 
 hooks = s.setdefault("hooks", {})
 
-# PreCompact: save before compaction
-pc = hooks.setdefault("PreCompact", [{}])
-if not isinstance(pc, list):
-    pc = [{}]
-    hooks["PreCompact"] = pc
-existing_pc = [h.get("command","") for block in pc for h in block.get("hooks", [])]
-pc_script = os.path.join(hooks_dir, "pre-compact-save.sh")
-if pc_script not in existing_pc:
-    pc.append({"hooks": [{"type": "command", "command": pc_script, "timeout": 15}]})
+def add_hook(hooks, event, script, extra=None):
+    """Add script to event's hook list, idempotent. extra = extra fields on the hook cmd dict."""
+    entries = hooks.get(event, [])
+    if not isinstance(entries, list):
+        entries = []
+    # Purge any legacy bare {} entries left by old installer versions
+    entries = [e for e in entries if isinstance(e, dict) and "hooks" in e]
+    existing_cmds = [h.get("command", "") for e in entries for h in e.get("hooks", [])]
+    if script not in existing_cmds:
+        cmd = {"type": "command", "command": script}
+        if extra:
+            cmd.update(extra)
+        entries.append({"matcher": "", "hooks": [cmd]})
+    hooks[event] = entries
 
-# Stop: stamp UPDATED
-stop = hooks.setdefault("Stop", [{}])
-if not isinstance(stop, list):
-    stop = [{}]
-    hooks["Stop"] = stop
-existing_stop = [h.get("command","") for block in stop for h in block.get("hooks", [])]
-stop_script = os.path.join(hooks_dir, "post-stop-save.sh")
-if stop_script not in existing_stop:
-    stop.append({"hooks": [{"type": "command", "command": stop_script, "timeout": 5}]})
-
-# SessionStart: restore prior state
-ss = hooks.setdefault("SessionStart", [{}])
-if not isinstance(ss, list):
-    ss = [{}]
-    hooks["SessionStart"] = ss
-existing_ss = [h.get("command","") for block in ss for h in block.get("hooks", [])]
-ss_script = os.path.join(hooks_dir, "session-start-restore.sh")
-if ss_script not in existing_ss:
-    ss.append({"hooks": [{"type": "command", "command": ss_script, "timeout": 10}]})
+add_hook(hooks, "PreCompact",    os.path.join(hooks_dir, "pre-compact-save.sh"),    {"timeout": 15})
+add_hook(hooks, "Stop",          os.path.join(hooks_dir, "post-stop-save.sh"),       {"timeout": 5})
+add_hook(hooks, "SessionStart",  os.path.join(hooks_dir, "session-start-restore.sh"), {"timeout": 10})
 
 with open(settings_path, "w") as f:
     json.dump(s, f, indent=2)
 print("    settings.json updated")
 PY
+
+# --- 3b. Post-install validation ---
+python3 - "$SETTINGS" <<'PYVAL'
+import json, sys
+settings_path = sys.argv[1]
+with open(settings_path) as f:
+    s = json.load(f)
+hooks = s.get("hooks", {})
+errors = []
+for event, entries in hooks.items():
+    if not isinstance(entries, list):
+        errors.append(f"{event}: expected list, got {type(entries).__name__}")
+        continue
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"{event}[{i}]: expected dict, got {type(entry).__name__}")
+            continue
+        if "hooks" not in entry:
+            errors.append(f"{event}[{i}]: missing 'hooks' key (keys={list(entry.keys())})")
+        elif not isinstance(entry["hooks"], list):
+            errors.append(f"{event}[{i}].hooks: expected array, got {type(entry['hooks']).__name__}")
+if errors:
+    print("ERROR: settings.json hook schema INVALID:")
+    for e in errors:
+        print(f"  {e}")
+    sys.exit(1)
+else:
+    print("    post-install validation PASSED: all hook entries well-formed")
+PYVAL
 
 # --- 4. Init state directory + agent current.md ---
 echo "[4/6] Initialising state directory..."
@@ -147,8 +166,19 @@ else
     echo "    git repo already exists, skipping init"
 fi
 
-# --- 6. Cron ---
-echo "[6/6] Wiring cron snapshot (*/5)..."
+# --- 6. /handover slash command ---
+echo "[6/7] Installing /handover slash command..."
+COMMANDS_DIR="$HOME/.claude/commands"
+mkdir -p "$COMMANDS_DIR"
+if [ -f "$SCRIPT_DIR/commands/handover.md" ]; then
+    cp "$SCRIPT_DIR/commands/handover.md" "$COMMANDS_DIR/handover.md"
+    echo "    /handover command installed: $COMMANDS_DIR/handover.md"
+else
+    echo "    warning: commands/handover.md not found in kit, skipping"
+fi
+
+# --- 7. Cron ---
+echo "[7/7] Wiring cron snapshot (*/5)..."
 CRON_LINE="*/5 * * * * $BIN_DIR/state-snapshot.sh >> /tmp/state-snapshot.log 2>&1 # agent-continuity-snapshot"
 if crontab -l 2>/dev/null | grep -q "agent-continuity-snapshot"; then
     echo "    cron already wired, skipping"
@@ -169,3 +199,4 @@ echo ""
 echo "State file: $CUR"
 echo "Snapshot  : every 5 min -> $STATE_DIR/MASTER-LEDGER.md"
 echo "Hooks     : PreCompact / Stop / SessionStart registered in $SETTINGS"
+echo "Command   : /handover installed at $COMMANDS_DIR/handover.md"
