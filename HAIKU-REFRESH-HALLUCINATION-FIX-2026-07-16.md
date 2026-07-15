@@ -1,0 +1,3 @@
+# haiku-refresh hallucination guard (2026-07-16)
+Bug: the Layer-C haiku-refresh (regenerates current.md every 12 min) could HALLUCINATE NEXT_ACTION on a FRESH agent — it invented tasks borrowed from other agents ("overnight job", another project's names) instead of preserving the seeded state.
+Fix: (1) strengthened the prompt — NEVER invent/borrow NEXT_ACTION, reproduce VERBATIM, output unchanged if nothing new (see bin/haiku-refresh.sh). (2) Do NOT put a brand-new agent on the */12 haiku-refresh cron until it has done real work — a fresh agent has no activity to summarize, so refreshing only risks hallucination. Add it once it is actively producing state.
