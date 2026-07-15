@@ -6,7 +6,12 @@
 # Exit 0 always -- silence is correct if no state exists.
 set -uo pipefail
 
-AGENT="${CLAUDE_AGENT_NAME:-unknown}"
+. "$HOME/.claude/hooks/_resolve-agent.sh"
+if [ -z "$CONT_AGENT" ]; then
+  echo "CONTINUITY DISABLED: agent name unresolved (CLAUDE_AGENT_NAME unset). This session is NOT restoring or saving durable state. Launch via claude-as <agent> or export CLAUDE_AGENT_NAME. Do NOT trust /handover here."
+  exit 0
+fi
+AGENT="$CONT_AGENT"
 HOST="$(hostname -s 2>/dev/null || echo unknown)"
 STATE_DIR="$HOME/.claude/state/$AGENT"
 CUR="$STATE_DIR/current.md"
@@ -14,14 +19,21 @@ LOG="$STATE_DIR/compact-save.log"
 
 [ -f "$CUR" ] || exit 0
 
-# Age check: skip if current.md older than 48h (dead agent, start fresh)
+# CV2-C4: use git commit timestamp (not mtime) for freshness gate.
+# After git clone/checkout mtime is "now" -- which would make a stale file look fresh.
+# Fall back to mtime if the file has no git history (new/untracked).
 NOW=$(date +%s)
-MTIME=$(stat -c %Y "$CUR" 2>/dev/null || python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$CUR" 2>/dev/null || echo 0)
+_git_ct=$(git -C "$(dirname "$CUR")" log -1 --format="%ct" -- "$(basename "$CUR")" 2>/dev/null | grep -E '^[0-9]+$' | head -1 || echo "")
+if [ -n "$_git_ct" ] && [ "$_git_ct" -gt 0 ]; then
+  MTIME="$_git_ct"
+else
+  MTIME=$(stat -c %Y "$CUR" 2>/dev/null || python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$CUR" 2>/dev/null || echo 0)
+fi
 AGE=$(( NOW - MTIME ))
+# Age check: skip if current.md older than 48h (dead agent, start fresh)
 [ "$AGE" -gt 172800 ] && exit 0
 
-# Freshness gate (Pelle V2 #5): act-mode if <1h; verify-mode if 1-6h; warn if >6h
-# Stored as a shell var for the Python block to read via sys.argv
+# Freshness gate (Pelle V2 #5, CV2-C4): act-mode if <1h; verify-mode if 1-6h; warn if >6h
 FRESHNESS_MODE="act"
 if [ "$AGE" -gt 21600 ]; then
   FRESHNESS_MODE="stale"

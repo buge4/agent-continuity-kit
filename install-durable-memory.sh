@@ -248,3 +248,8 @@ echo "State file: $CUR"
 echo "Snapshot  : every 5 min -> $STATE_DIR/MASTER-LEDGER.md"
 echo "Hooks     : PreCompact / Stop / SessionStart registered in $SETTINGS"
 echo "Command   : /handover installed at $COMMANDS_DIR/handover.md"
+
+# --- agent-isolation fix (2026-07-15) ---
+cp hooks/_resolve-agent.sh ~/.claude/hooks/ 2>/dev/null || true
+mkdir -p ~/.claude/bin && cp bin/claude-as ~/.claude/bin/ && chmod +x ~/.claude/bin/claude-as
+echo "REMINDER: launch sessions via claude-as <agent> OR export CLAUDE_AGENT_NAME, else continuity fails loud."
