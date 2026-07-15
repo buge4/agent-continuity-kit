@@ -1,0 +1,14 @@
+# Copy this into your state dir as `.gitignore` (the installer does this for you).
+# Belt-and-suspenders against secrets ever reaching the state repo.
+*password*
+*secret*
+*creds*
+*credential*
+*token*
+*.key
+*.pem
+*.env
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*

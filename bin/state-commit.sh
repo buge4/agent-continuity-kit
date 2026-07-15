@@ -41,7 +41,8 @@ open(p,'w').write(s)
 PY
 fi
 
-git add -A
+# SECURITY: scoped add -- never blindly add (a secret in the tree would be pushed). See agent-state-secrets-leak-fix.
+git add -A -- '*/current.md' '*/history.md' MASTER-LEDGER.md README.md .gitignore 2>/dev/null
 git diff --cached --quiet && { echo "state-commit: nothing to commit"; exit 0; }
 git commit -q -m "$MSG"
 for i in 1 2 3 4 5; do

@@ -137,7 +137,8 @@ else
     trap "rmdir '$LOCK_DIR' 2>/dev/null || true" EXIT INT TERM
 fi
 
-git add -A
+# SECURITY: scoped add -- never blindly add (a secret in the tree would be pushed). See agent-state-secrets-leak-fix.
+git add -A -- '*/current.md' '*/history.md' MASTER-LEDGER.md README.md .gitignore 2>/dev/null
 if ! git diff --cached --quiet; then
     git -c user.email=snapshot@local -c user.name=StateSnapshot commit -qm "snapshot $TS" 2>/dev/null
     for i in 1 2 3; do
