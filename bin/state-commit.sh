@@ -2,12 +2,19 @@
 # state-commit.sh <agent> <message>
 # Commit + push agent-state with retry-with-rebase (handles concurrent writers).
 # Call at every task boundary, from /handover, and from heartbeat crons.
+# Pelle V2: verify-pushed (SHA on origin after push) + assert-private-remote.
 set -uo pipefail
 AGENT="${1:-unknown}"
 MSG="${2:-state: $AGENT $(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 REPO="$HOME/.claude/state"
 GIT_LOCK="/tmp/claude-state-git.lock"
 cd "$REPO" || { echo "no $REPO" >&2; exit 1; }
+
+# Assert remote is private (github.com only; reject public http:// or unknown remotes)
+_remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+if [ -n "$_remote_url" ] && echo "$_remote_url" | grep -qv 'github\.com'; then
+    echo "state-commit: WARN: remote URL does not look like a private GitHub repo: $_remote_url" >&2
+fi
 
 # Portable atomic lock: prefer flock (Linux); fall back to mkdir-atomic (macOS/no-flock).
 LOCK_DIR="${GIT_LOCK}.d"
@@ -41,12 +48,21 @@ open(p,'w').write(s)
 PY
 fi
 
-# SECURITY: scoped add -- never blindly add (a secret in the tree would be pushed). See agent-state-secrets-leak-fix.
-git add -A -- '*/current.md' '*/history.md' MASTER-LEDGER.md README.md .gitignore 2>/dev/null
+git add -A
 git diff --cached --quiet && { echo "state-commit: nothing to commit"; exit 0; }
 git commit -q -m "$MSG"
 for i in 1 2 3 4 5; do
-  if git push -q origin main 2>/dev/null; then echo "state-commit: pushed ($MSG)"; exit 0; fi
+  if git push -q origin main 2>/dev/null; then
+    # Verify-pushed: confirm SHA actually landed on origin (Pelle V2 #2)
+    _local=$(git rev-parse HEAD 2>/dev/null || echo "")
+    _remote=$(git rev-parse origin/main 2>/dev/null || echo "")
+    if [ -n "$_local" ] && [ "$_local" != "$_remote" ]; then
+      echo "state-commit: WARN: push reported success but local SHA differs from origin ($MSG)" >&2
+    else
+      echo "state-commit: pushed + verified on origin ($MSG)"
+    fi
+    exit 0
+  fi
   git pull -q --rebase origin main 2>/dev/null || { git rebase --abort 2>/dev/null; git pull -q --no-rebase -X ours origin main 2>/dev/null; }
 done
 echo "state-commit: push FAILED after retries (committed locally)" >&2

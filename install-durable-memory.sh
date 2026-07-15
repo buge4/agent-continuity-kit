@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-AGENT_NAME="${AGENT_NAME:-myagent}"
+_BASE_AGENT="${AGENT_NAME:-myagent}"
 STATE_REPO_URL="${STATE_REPO_URL:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -23,6 +23,18 @@ HOOKS_DIR="$HOME/.claude/hooks"
 BIN_DIR="$HOME/.claude/bin"
 SETTINGS="$HOME/.claude/settings.json"
 STATE_DIR="$HOME/.claude/state"
+
+# Auto-qualify agent name with hostname for new installs, so slots are unique per host.
+# Skip qualification if: (a) name already contains '-' (already qualified), OR
+# (b) a state directory for the bare name already exists (backward compat).
+_HOST_SLUG=$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | head -c 20)
+if echo "$_BASE_AGENT" | grep -q '-' || [ -d "$STATE_DIR/$_BASE_AGENT" ]; then
+    AGENT_NAME="$_BASE_AGENT"
+else
+    AGENT_NAME="${_BASE_AGENT}-${_HOST_SLUG}"
+    echo "  Note: auto-qualified name to '$AGENT_NAME' (host=$_HOST_SLUG)."
+    echo "  To override, set AGENT_NAME explicitly (e.g. AGENT_NAME=claude2-macbook)."
+fi
 
 echo "=== agent-continuity-kit installer ==="
 echo "Agent name : $AGENT_NAME"
@@ -41,13 +53,14 @@ echo "    hooks installed: pre-compact-save, post-stop-save, session-start-resto
 # --- 2. Copy bin scripts ---
 echo "[2/6] Installing bin scripts..."
 mkdir -p "$BIN_DIR"
-cp "$SCRIPT_DIR/bin/state-snapshot.sh" "$BIN_DIR/"
-cp "$SCRIPT_DIR/bin/state-commit.sh"   "$BIN_DIR/state-commit.sh"
-chmod +x "$BIN_DIR/state-snapshot.sh" "$BIN_DIR/state-commit.sh"
+cp "$SCRIPT_DIR/bin/state-snapshot.sh"       "$BIN_DIR/"
+cp "$SCRIPT_DIR/bin/state-commit.sh"          "$BIN_DIR/state-commit.sh"
+cp "$SCRIPT_DIR/bin/stuck-git-watchdog.sh"    "$BIN_DIR/stuck-git-watchdog.sh"
+chmod +x "$BIN_DIR/state-snapshot.sh" "$BIN_DIR/state-commit.sh" "$BIN_DIR/stuck-git-watchdog.sh"
 mkdir -p "$STATE_DIR/bin"
 ln -sf "$BIN_DIR/state-commit.sh" "$STATE_DIR/bin/state-commit.sh" 2>/dev/null || cp "$BIN_DIR/state-commit.sh" "$STATE_DIR/bin/state-commit.sh"
 chmod +x "$STATE_DIR/bin/state-commit.sh"
-echo "    state-snapshot.sh + state-commit.sh installed"
+echo "    state-snapshot.sh + state-commit.sh + stuck-git-watchdog.sh installed"
 
 # --- 3. Wire settings.json ---
 echo "[3/6] Registering hooks in settings.json..."
@@ -125,7 +138,10 @@ chmod 700 "$STATE_DIR/$AGENT_NAME" 2>/dev/null || true
 CUR="$STATE_DIR/$AGENT_NAME/current.md"
 if [ ! -f "$CUR" ]; then
     TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    _PROJECT=$(basename "$(pwd)" 2>/dev/null || echo 'unknown')
     cat > "$CUR" <<EOF
+RESUME HERE: you are $AGENT_NAME on $_HOST_SLUG, project $_PROJECT; LAST: installed agent-continuity-kit $TS; NEXT: fill in first real task after session starts
+INSTANCE: $AGENT_NAME-$_HOST_SLUG-$_PROJECT
 LAST_COMPACTED: never
 UPDATED: $TS
 # $AGENT_NAME -- session-continuity STATE
@@ -146,20 +162,43 @@ else
 fi
 
 # --- 5. Git init or clone ---
+# Pelle V2 kit bug fix: if remote already has history, clone into STATE_DIR rather than
+# init+push (which causes a non-fast-forward rejection). Safe to re-run.
 echo "[5/6] Setting up git state repo..."
-cd "$STATE_DIR"
-if [ ! -d ".git" ]; then
-    git init -q
-    git -c user.email="state@local" -c user.name="StateSystem" add -A
-    git -c user.email="state@local" -c user.name="StateSystem" commit -qm "init: agent-continuity-kit"
+if [ ! -d "$STATE_DIR/.git" ]; then
     if [ -n "$STATE_REPO_URL" ]; then
-        git remote add origin "$STATE_REPO_URL"
-        git push -u origin main 2>/dev/null || git push -u origin master 2>/dev/null || echo "    warning: push failed (check remote + SSH key)"
-        echo "    git repo pushed to $STATE_REPO_URL"
+        # Check if remote has any commits; if so, clone to get the history
+        if git ls-remote --exit-code "$STATE_REPO_URL" HEAD >/dev/null 2>&1; then
+            echo "    remote has history -- cloning into STATE_DIR"
+            _tmp_clone="$STATE_DIR-clone-$$"
+            git clone -q "$STATE_REPO_URL" "$_tmp_clone"
+            cp -a "$_tmp_clone/." "$STATE_DIR/"
+            rm -rf "$_tmp_clone"
+            # Copy any new agent dirs we just created (not yet in the clone)
+            cd "$STATE_DIR"
+            git -c user.email="state@local" -c user.name="StateSystem" add -A 2>/dev/null || true
+            git -c user.email="state@local" -c user.name="StateSystem" diff --cached --quiet 2>/dev/null || \
+                git -c user.email="state@local" -c user.name="StateSystem" commit -qm "init: add agent $AGENT_NAME" 2>/dev/null || true
+            git push -q origin main 2>/dev/null || true
+        else
+            # Remote is empty -- safe to init + push
+            cd "$STATE_DIR"
+            git init -q
+            git -c user.email="state@local" -c user.name="StateSystem" add -A
+            git -c user.email="state@local" -c user.name="StateSystem" commit -qm "init: agent-continuity-kit"
+            git remote add origin "$STATE_REPO_URL"
+            git push -u origin main 2>/dev/null || git push -u origin master 2>/dev/null || echo "    warning: push failed (check remote + SSH key)"
+        fi
+        echo "    git repo ready at $STATE_REPO_URL"
     else
+        cd "$STATE_DIR"
+        git init -q
+        git -c user.email="state@local" -c user.name="StateSystem" add -A
+        git -c user.email="state@local" -c user.name="StateSystem" commit -qm "init: agent-continuity-kit"
         echo "    git repo initialised locally (no remote -- set STATE_REPO_URL to add one)"
     fi
 else
+    cd "$STATE_DIR"
     if [ -n "$STATE_REPO_URL" ]; then
         git remote get-url origin &>/dev/null || git remote add origin "$STATE_REPO_URL"
     fi
@@ -178,13 +217,22 @@ else
 fi
 
 # --- 7. Cron ---
-echo "[7/7] Wiring cron snapshot (*/5)..."
+echo "[7/7] Wiring cron snapshot (*/5) + stuck-git watchdog (*/5)..."
 CRON_LINE="*/5 * * * * $BIN_DIR/state-snapshot.sh >> /tmp/state-snapshot.log 2>&1 # agent-continuity-snapshot"
-if crontab -l 2>/dev/null | grep -q "agent-continuity-snapshot"; then
-    echo "    cron already wired, skipping"
+WATCHDOG_LINE="*/5 * * * * $BIN_DIR/stuck-git-watchdog.sh >> /tmp/stuck-git-watchdog.log 2>&1 # agent-continuity-watchdog"
+_crontab=$(crontab -l 2>/dev/null || echo "")
+if echo "$_crontab" | grep -q "agent-continuity-snapshot"; then
+    echo "    snapshot cron already wired, skipping"
 else
-    ( crontab -l 2>/dev/null; echo "$CRON_LINE" ) | crontab -
-    echo "    cron added: $CRON_LINE"
+    ( echo "$_crontab"; echo "$CRON_LINE" ) | crontab -
+    echo "    snapshot cron added"
+fi
+_crontab=$(crontab -l 2>/dev/null || echo "")
+if echo "$_crontab" | grep -q "agent-continuity-watchdog"; then
+    echo "    watchdog cron already wired, skipping"
+else
+    ( echo "$_crontab"; echo "$WATCHDOG_LINE" ) | crontab -
+    echo "    watchdog cron added"
 fi
 
 echo ""
