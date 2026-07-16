@@ -63,3 +63,6 @@ unset TOK
 echo "Seat written to $VAR. Current pool (names + set/empty, no values):"
 while IFS='=' read -r k v; do case "$k" in export\ CLAUDE_CODE_OAUTH_TOKEN*) n="${k#export }"; [ -n "$v" ] && echo "  $n = [SET]" || echo "  $n = [empty]";; esac; done < <(sudo cat "$ENV_FILE")
 echo "Done. Next fleet fire will rotate through all SET seats."
+
+# propagate the new seat to the shared store so other boxes sync it
+[ -x "$HOME/.claude/bin/seats-push.sh" ] && { echo "Propagating to shared seat store..."; "$HOME/.claude/bin/seats-push.sh" || echo "(store push skipped; seat still active locally)"; }
