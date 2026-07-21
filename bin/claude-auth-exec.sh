@@ -7,9 +7,9 @@
 # ADDITIVE / REVERSIBLE.  Old v1 saved alongside as claude-auth-exec.sh.v1.bak
 #
 # Reads /etc/veriton/claude-auth.env (root:root 600). OAuth pool, in try order:
-#   CLAUDE_CODE_OAUTH_TOKEN            (seat 1 — bvh@veriton.io, company pays)
+#   CLAUDE_CODE_OAUTH_TOKEN            (seat 1 — the primary org seat)
 #   CLAUDE_CODE_OAUTH_TOKEN_2 .. _9    (extra Team/Max seats — add as they arrive)
-#   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK   (overflow seat — e.g. bvhauge@gmail.com)
+#   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK   (overflow seat — a separate-org account)
 # Each seat is a full weekly cap; pooling them multiplies weekly capacity at $0.
 # On a 401/429/usage-limit/auth error the seat is marked capped for COOLDOWN
 # seconds and rotation moves to the next live seat. When ALL OAuth seats are

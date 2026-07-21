@@ -22,6 +22,6 @@ gpg --batch --yes --passphrase-file "$PASS" --cipher-algo AES256 -c -o "$REPO/se
 nseats="$(grep -c . "$merged")"
 shred -u "$store" "$loc" "$merged" 2>/dev/null || rm -f "$store" "$loc" "$merged"
 git -C "$REPO" add seats.env.gpg
-git -C "$REPO" -c user.email=bvhauge@gmail.com -c user.name=claude2 commit -q -m "seats: update ($nseats) $ts" 2>/dev/null || { echo "$ts push: nothing changed" >>"$LOG"; exit 0; }
+git -C "$REPO" -c user.email=noreply@arctx.tech -c user.name=claude2 commit -q -m "seats: update ($nseats) $ts" 2>/dev/null || { echo "$ts push: nothing changed" >>"$LOG"; exit 0; }
 git -C "$REPO" pull -q --rebase 2>/dev/null || true
 git -C "$REPO" push -q && echo "$ts PUSHED store ($nseats seats) — other boxes will sync" >>"$LOG" || echo "$ts push FAILED" >>"$LOG"
